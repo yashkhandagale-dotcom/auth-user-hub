@@ -9,6 +9,7 @@ interface LoginProps {
 const Login = ({ onSuccess, onRegisterClick }: LoginProps) => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [rememberMe, setRememberMe] = useState(true);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -19,7 +20,7 @@ const Login = ({ onSuccess, onRegisterClick }: LoginProps) => {
 
     try {
       const data = await api.login(email, password);
-      auth.setToken(data.token);
+      auth.setToken(data.token, rememberMe);
       onSuccess();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
@@ -62,6 +63,22 @@ const Login = ({ onSuccess, onRegisterClick }: LoginProps) => {
               placeholder="Enter password"
               required
             />
+          </div>
+
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              id="rememberMe"
+              checked={rememberMe}
+              onChange={(e) => setRememberMe(e.target.checked)}
+              className="w-4 h-4 rounded border-input text-primary focus:ring-ring cursor-pointer"
+            />
+            <label
+              htmlFor="rememberMe"
+              className="text-sm text-muted-foreground cursor-pointer select-none"
+            >
+              Remember me
+            </label>
           </div>
 
           {error && (
