@@ -55,9 +55,49 @@ export const api = {
   },
 };
 
+// Parse JWT payload without external library
+const parseJwt = (token: string): { exp?: number } | null => {
+  try {
+    const base64Url = token.split(".")[1];
+    const base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
+    const jsonPayload = decodeURIComponent(
+      atob(base64)
+        .split("")
+        .map((c) => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2))
+        .join("")
+    );
+    return JSON.parse(jsonPayload);
+  } catch {
+    return null;
+  }
+};
+
 export const auth = {
   getToken: () => localStorage.getItem("jwt_token"),
   setToken: (token: string) => localStorage.setItem("jwt_token", token),
   removeToken: () => localStorage.removeItem("jwt_token"),
-  isAuthenticated: () => !!localStorage.getItem("jwt_token"),
+  
+  isAuthenticated: () => {
+    const token = localStorage.getItem("jwt_token");
+    if (!token) return false;
+    return !auth.isTokenExpired(token);
+  },
+
+  isTokenExpired: (token: string): boolean => {
+    const payload = parseJwt(token);
+    if (!payload?.exp) return true;
+    // exp is in seconds, Date.now() is in milliseconds
+    return Date.now() >= payload.exp * 1000;
+  },
+
+  getTokenExpiration: (token: string): number | null => {
+    const payload = parseJwt(token);
+    return payload?.exp ? payload.exp * 1000 : null;
+  },
+
+  getTimeUntilExpiration: (token: string): number => {
+    const expiration = auth.getTokenExpiration(token);
+    if (!expiration) return 0;
+    return Math.max(0, expiration - Date.now());
+  },
 };
