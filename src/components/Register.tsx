@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { api } from "@/lib/api";
+import { validateEmail, validatePassword, validateUsername } from "@/lib/validation";
+import PasswordStrength from "./PasswordStrength";
 
 interface RegisterProps {
   onSuccess: () => void;
@@ -11,11 +13,35 @@ const Register = ({ onSuccess, onLoginClick }: RegisterProps) => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<{
+    username?: string;
+    email?: string;
+    password?: string;
+  }>({});
   const [loading, setLoading] = useState(false);
+
+  const validateForm = (): boolean => {
+    const errors: { username?: string; email?: string; password?: string } = {};
+
+    const usernameError = validateUsername(username);
+    if (usernameError) errors.username = usernameError;
+
+    const emailError = validateEmail(email);
+    if (emailError) errors.email = emailError;
+
+    const passwordError = validatePassword(password);
+    if (passwordError) errors.password = passwordError;
+
+    setFieldErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+
+    if (!validateForm()) return;
+
     setLoading(true);
 
     try {
@@ -43,11 +69,19 @@ const Register = ({ onSuccess, onLoginClick }: RegisterProps) => {
             <input
               type="text"
               value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              className="w-full px-4 py-2 rounded-md border border-input bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+              onChange={(e) => {
+                setUsername(e.target.value);
+                if (fieldErrors.username)
+                  setFieldErrors((prev) => ({ ...prev, username: undefined }));
+              }}
+              className={`w-full px-4 py-2 rounded-md border bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring ${
+                fieldErrors.username ? "border-destructive" : "border-input"
+              }`}
               placeholder="Enter username"
-              required
             />
+            {fieldErrors.username && (
+              <p className="mt-1 text-xs text-destructive">{fieldErrors.username}</p>
+            )}
           </div>
 
           <div>
@@ -57,11 +91,19 @@ const Register = ({ onSuccess, onLoginClick }: RegisterProps) => {
             <input
               type="email"
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full px-4 py-2 rounded-md border border-input bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+              onChange={(e) => {
+                setEmail(e.target.value);
+                if (fieldErrors.email)
+                  setFieldErrors((prev) => ({ ...prev, email: undefined }));
+              }}
+              className={`w-full px-4 py-2 rounded-md border bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring ${
+                fieldErrors.email ? "border-destructive" : "border-input"
+              }`}
               placeholder="Enter email"
-              required
             />
+            {fieldErrors.email && (
+              <p className="mt-1 text-xs text-destructive">{fieldErrors.email}</p>
+            )}
           </div>
 
           <div>
@@ -71,11 +113,20 @@ const Register = ({ onSuccess, onLoginClick }: RegisterProps) => {
             <input
               type="password"
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-4 py-2 rounded-md border border-input bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+              onChange={(e) => {
+                setPassword(e.target.value);
+                if (fieldErrors.password)
+                  setFieldErrors((prev) => ({ ...prev, password: undefined }));
+              }}
+              className={`w-full px-4 py-2 rounded-md border bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring ${
+                fieldErrors.password ? "border-destructive" : "border-input"
+              }`}
               placeholder="Enter password"
-              required
             />
+            {fieldErrors.password && (
+              <p className="mt-1 text-xs text-destructive">{fieldErrors.password}</p>
+            )}
+            <PasswordStrength password={password} />
           </div>
 
           {error && (
