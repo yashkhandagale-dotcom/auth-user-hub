@@ -1,13 +1,53 @@
-// Update this page (the content is just a fallback if you fail to update the page)
+import { useState, useEffect } from "react";
+import { auth } from "@/lib/api";
+import Login from "@/components/Login";
+import Register from "@/components/Register";
+import Users from "@/components/Users";
+
+type Page = "login" | "register" | "users";
 
 const Index = () => {
+  const [currentPage, setCurrentPage] = useState<Page>("login");
+
+  useEffect(() => {
+    // Check if user is already authenticated
+    if (auth.isAuthenticated()) {
+      setCurrentPage("users");
+    }
+  }, []);
+
+  const handleLoginSuccess = () => {
+    setCurrentPage("users");
+  };
+
+  const handleRegisterSuccess = () => {
+    setCurrentPage("login");
+  };
+
+  const handleLogout = () => {
+    setCurrentPage("login");
+  };
+
+  // Render based on current page
+  if (currentPage === "register") {
+    return (
+      <Register
+        onSuccess={handleRegisterSuccess}
+        onLoginClick={() => setCurrentPage("login")}
+      />
+    );
+  }
+
+  if (currentPage === "users") {
+    return <Users onLogout={handleLogout} />;
+  }
+
+  // Default: Login page
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background">
-      <div className="text-center">
-        <h1 className="mb-4 text-4xl font-bold">Welcome to Your Blank App</h1>
-        <p className="text-xl text-muted-foreground">Start building your amazing project here!</p>
-      </div>
-    </div>
+    <Login
+      onSuccess={handleLoginSuccess}
+      onRegisterClick={() => setCurrentPage("register")}
+    />
   );
 };
 
