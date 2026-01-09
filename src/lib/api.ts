@@ -72,13 +72,42 @@ const parseJwt = (token: string): { exp?: number } | null => {
   }
 };
 
+const TOKEN_KEY = "jwt_token";
+const STORAGE_TYPE_KEY = "auth_storage_type";
+
+const getStorage = (): Storage => {
+  const storageType = localStorage.getItem(STORAGE_TYPE_KEY);
+  return storageType === "session" ? sessionStorage : localStorage;
+};
+
 export const auth = {
-  getToken: () => localStorage.getItem("jwt_token"),
-  setToken: (token: string) => localStorage.setItem("jwt_token", token),
-  removeToken: () => localStorage.removeItem("jwt_token"),
+  getToken: () => {
+    // Check both storages in case of mismatch
+    return localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY);
+  },
+
+  setToken: (token: string, rememberMe: boolean = true) => {
+    // Clear both storages first
+    localStorage.removeItem(TOKEN_KEY);
+    sessionStorage.removeItem(TOKEN_KEY);
+    
+    if (rememberMe) {
+      localStorage.setItem(STORAGE_TYPE_KEY, "local");
+      localStorage.setItem(TOKEN_KEY, token);
+    } else {
+      localStorage.setItem(STORAGE_TYPE_KEY, "session");
+      sessionStorage.setItem(TOKEN_KEY, token);
+    }
+  },
+
+  removeToken: () => {
+    localStorage.removeItem(TOKEN_KEY);
+    sessionStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(STORAGE_TYPE_KEY);
+  },
   
   isAuthenticated: () => {
-    const token = localStorage.getItem("jwt_token");
+    const token = auth.getToken();
     if (!token) return false;
     return !auth.isTokenExpired(token);
   },
@@ -86,7 +115,6 @@ export const auth = {
   isTokenExpired: (token: string): boolean => {
     const payload = parseJwt(token);
     if (!payload?.exp) return true;
-    // exp is in seconds, Date.now() is in milliseconds
     return Date.now() >= payload.exp * 1000;
   },
 
