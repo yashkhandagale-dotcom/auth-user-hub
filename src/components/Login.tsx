@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api, auth } from "@/lib/api";
+import { useAuth } from "@/contexts/AuthContext";
 import { validateEmail, validatePassword } from "@/lib/validation";
 
 interface LoginProps {
@@ -8,6 +9,7 @@ interface LoginProps {
 }
 
 const Login = ({ onSuccess, onRegisterClick }: LoginProps) => {
+  const { login: authLogin } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [rememberMe, setRememberMe] = useState(true);
@@ -39,6 +41,7 @@ const Login = ({ onSuccess, onRegisterClick }: LoginProps) => {
     try {
       const data = await api.login(email, password);
       auth.setToken(data.token, rememberMe);
+      authLogin(email, data.role || "admin"); // Use role from API or default to admin for demo
       onSuccess();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
