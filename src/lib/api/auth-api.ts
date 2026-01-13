@@ -18,40 +18,43 @@ export const authApi = {
   },
 
   /**
-   * Login user and get tokens
-   * POST /auth/login
+   * Login user and get access token
+   * Refresh token is sent as HttpOnly cookie
    */
-  login: async (email: string, password: string, rememberMe: boolean = true): Promise<AuthTokens> => {
+  login: async (email: string, password: string): Promise<AuthTokens> => {
     const request: LoginRequest = { email, password };
     const tokens = await httpClient.authPost<AuthTokens>('/auth/login', request);
     
-    // Store tokens
-    tokenService.setTokens(tokens.accessToken, tokens.refreshToken, rememberMe);
+    // Only store access token; refresh token is cookie-based
+    tokenService.setAccessToken(tokens.accessToken);
     
     return tokens;
   },
 
   /**
-   * Refresh access token
-   * POST /auth/refresh
+   * Refresh access token via cookie
+   * No need to send refresh token manually
    */
   refreshToken: async (): Promise<AuthTokens> => {
-    const refreshToken = tokenService.getRefreshToken();
-    if (!refreshToken) {
-      throw new Error('No refresh token available');
-    }
+    const tokens = await httpClient.authPost<AuthTokens>('/auth/refresh', undefined, {
+      credentials: 'include', // send HttpOnly cookie
+    });
 
-    const tokens = await httpClient.authPost<AuthTokens>('/auth/refresh', { refreshToken });
-    tokenService.setTokens(tokens.accessToken, tokens.refreshToken);
-    
+    // Store new access token
+    tokenService.setAccessToken(tokens.accessToken);
+
     return tokens;
   },
 
   /**
-   * Logout user - clear tokens
+   * Logout user
+   * Clears access token; backend clears cookie
    */
-  logout: (): void => {
-    tokenService.clearTokens();
+  logout: async (): Promise<void> => {
+    await httpClient.authPost('/auth/logout', undefined, {
+      credentials: 'include', // clear HttpOnly cookie
+    });
+    tokenService.clearAccessToken();
   },
 
   /**

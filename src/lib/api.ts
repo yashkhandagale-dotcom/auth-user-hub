@@ -1,10 +1,6 @@
 // src/lib/api.ts
 const API_BASE_URL = "https://localhost:7291";
 
-const TOKEN_KEY = "jwt_token";
-const REFRESH_KEY = "refresh_token";
-const STORAGE_TYPE_KEY = "auth_storage_type";
-
 // -------------------- JWT PARSING --------------------
 const parseJwt = (token: string): { exp?: number } | null => {
   try {
@@ -22,37 +18,18 @@ const parseJwt = (token: string): { exp?: number } | null => {
   }
 };
 
-// -------------------- AUTH HELPERS --------------------
+// -------------------- TOKEN SERVICE --------------------
 export const auth = {
-  getToken: (): string | null =>
-    localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY),
+  TOKEN_KEY: "jwt_token",
 
-  getRefreshToken: (): string | null =>
-    localStorage.getItem(REFRESH_KEY) || sessionStorage.getItem(REFRESH_KEY),
+  getToken: (): string | null => sessionStorage.getItem(auth.TOKEN_KEY),
 
-  setToken: (accessToken: string, refreshToken: string, rememberMe = true) => {
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(REFRESH_KEY);
-    sessionStorage.removeItem(TOKEN_KEY);
-    sessionStorage.removeItem(REFRESH_KEY);
-
-    if (rememberMe) {
-      localStorage.setItem(STORAGE_TYPE_KEY, "local");
-      localStorage.setItem(TOKEN_KEY, accessToken);
-      localStorage.setItem(REFRESH_KEY, refreshToken);
-    } else {
-      localStorage.setItem(STORAGE_TYPE_KEY, "session");
-      sessionStorage.setItem(TOKEN_KEY, accessToken);
-      sessionStorage.setItem(REFRESH_KEY, refreshToken);
-    }
+  setAccessToken: (token: string) => {
+    sessionStorage.setItem(auth.TOKEN_KEY, token);
   },
 
   removeToken: () => {
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(REFRESH_KEY);
-    localStorage.removeItem(STORAGE_TYPE_KEY);
-    sessionStorage.removeItem(TOKEN_KEY);
-    sessionStorage.removeItem(REFRESH_KEY);
+    sessionStorage.removeItem(auth.TOKEN_KEY);
   },
 
   isTokenExpired: (token: string) => {
@@ -60,108 +37,120 @@ export const auth = {
     if (!payload?.exp) return true;
     return Date.now() + 5000 >= payload.exp * 1000; // 5s buffer
   },
-
-  isAuthenticated: () => {
-    const token = auth.getToken();
-    return !!token && !auth.isTokenExpired(token);
-  },
 };
 
-// -------------------- FETCH WITH AUTH --------------------
-const fetchWithAuth = async (url: string, options: RequestInit = {}) => {
+// -------------------- REFRESH LOGIC --------------------
+const refreshAccessToken = async (): Promise<string | null> => {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/auth/refresh`, {
+      method: "POST",
+      credentials: "include", // 🔴 sends refresh cookie
+    });
+
+    if (!res.ok) return null;
+
+    const data = await res.json();
+    auth.setAccessToken(data.accessToken);
+    return data.accessToken;
+  } catch {
+    auth.removeToken();
+    return null;
+  }
+};
+
+// -------------------- FETCH WITH AUTO REFRESH --------------------
+const fetchWithAuth = async (url: string, options: RequestInit = {}): Promise<any> => {
   let token = auth.getToken();
 
   if (!token || auth.isTokenExpired(token)) {
-    auth.removeToken();
-    throw new Error("Unauthorized: token missing or expired");
+    token = await refreshAccessToken();
+    if (!token) {
+      auth.removeToken();
+      throw new Error("Unauthorized: token expired");
+    }
   }
 
-  const headers = {
-    ...options.headers,
-    Authorization: `Bearer ${token}`,
-    "Content-Type": "application/json",
-  };
+  const response = await fetch(url, {
+    ...options,
+    credentials: "include",
+    headers: {
+      ...(options.headers || {}),
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+  });
 
-  const response = await fetch(url, { ...options, headers });
+  if (response.status === 401) {
+    // Retry once after refresh
+    const newToken = await refreshAccessToken();
+    if (!newToken) throw new Error("Unauthorized");
+    return fetchWithAuth(url, options);
+  }
 
   if (!response.ok) {
-    if (response.status === 401) {
-      auth.removeToken();
-      throw new Error("Unauthorized");
-    }
-    throw new Error(`Request failed: ${response.statusText}`);
+    const errorText = await response.text();
+    throw new Error(errorText || response.statusText);
   }
 
+  if (response.status === 204) return undefined; // No Content
   return response.json();
 };
-
-// -------------------- TYPES --------------------
-export interface UserDto {
-  id: string;
-  username: string;
-  email: string;
-  role: "user" | "admin";
-  isActive: boolean;
-  createdAt: string;
-  lastLogin?: string;
-}
 
 // -------------------- API METHODS --------------------
 export const api = {
   // ---------- AUTH ----------
   register: async (username: string, email: string, password: string) => {
-    const response = await fetch(`${API_BASE_URL}/api/auth/register`, {
+    const res = await fetch(`${API_BASE_URL}/api/auth/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, email, password }),
     });
 
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(error || "Registration failed");
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(err || "Registration failed");
     }
 
-    return response.json();
+    return res.json();
   },
 
   login: async (email: string, password: string) => {
-    const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
+    const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      credentials: "include", // 🔴 important for refresh cookie
       body: JSON.stringify({ email, password }),
     });
 
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(error || "Login failed");
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(err || "Login failed");
     }
 
-    return response.json(); // { accessToken, refreshToken, role }
+    const data = await res.json();
+    auth.setAccessToken(data.accessToken);
+    return data;
+  },
+
+  logout: async () => {
+    await fetch(`${API_BASE_URL}/api/auth/logout`, {
+      method: "POST",
+      credentials: "include",
+    });
+    auth.removeToken();
   },
 
   // ---------- USERS ----------
-  getUsers: async (): Promise<UserDto[]> =>
-    fetchWithAuth(`${API_BASE_URL}/api/users`),
-
-  getUserById: async (id: string): Promise<UserDto> =>
-    fetchWithAuth(`${API_BASE_URL}/api/users/${id}`),
-
-  saveUser: async (user: Partial<UserDto>): Promise<UserDto> => {
+  getUsers: async () => fetchWithAuth(`${API_BASE_URL}/api/users`),
+  getUserById: async (id: string) => fetchWithAuth(`${API_BASE_URL}/api/users/${id}`),
+  saveUser: async (user: any) => {
     const method = user.id ? "PUT" : "POST";
-    const url = user.id
-      ? `${API_BASE_URL}/api/users/${user.id}`
-      : `${API_BASE_URL}/api/users`;
-    return fetchWithAuth(url, {
-      method,
-      body: JSON.stringify(user),
-    });
+    const url = user.id ? `${API_BASE_URL}/api/users/${user.id}` : `${API_BASE_URL}/api/users`;
+    return fetchWithAuth(url, { method, body: JSON.stringify(user) });
   },
+  deleteUser: async (id: string) => fetchWithAuth(`${API_BASE_URL}/api/users/${id}`, { method: "DELETE" }),
 
-  deleteUser: async (id: string) =>
-    fetchWithAuth(`${API_BASE_URL}/api/users/${id}`, { method: "DELETE" }),
-
-  // ---------- DEVICES (optional, kept from old API) ----------
+  // ---------- DEVICES ----------
   getDevices: async () => fetchWithAuth(`${API_BASE_URL}/api/Device`),
-  getUnassignedDevices: async () =>
-    fetchWithAuth(`${API_BASE_URL}/api/Device/unassigned`),
+  getUnassignedDevices: async () => fetchWithAuth(`${API_BASE_URL}/api/Device/unassigned`),
 };

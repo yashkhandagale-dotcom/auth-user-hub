@@ -22,24 +22,17 @@ class HttpClient {
 
     // Add authorization header if required
     if (requiresAuth) {
-      const token = tokenService.getAccessToken();
-      if (!token) {
-        throw this.createError('No authentication token available', 401);
-      }
-      
-      // Check if token is expired and try to refresh
-      if (tokenService.isTokenExpired(token)) {
-        const refreshed = await this.tryRefreshToken();
-        if (!refreshed) {
+      let token = tokenService.getAccessToken();
+
+      // If token missing or expired, try refresh (cookie-based)
+      if (!token || tokenService.isTokenExpired(token)) {
+        token = await this.tryRefreshToken();
+        if (!token) {
           throw this.createError('Session expired. Please log in again.', 401);
         }
-        const newToken = tokenService.getAccessToken();
-        if (newToken) {
-          (headers as Record<string, string>)['Authorization'] = `Bearer ${newToken}`;
-        }
-      } else {
-        (headers as Record<string, string>)['Authorization'] = `Bearer ${token}`;
       }
+
+      headers['Authorization'] = `Bearer ${token}`;
     }
 
     const controller = new AbortController();
@@ -50,40 +43,30 @@ class HttpClient {
         ...fetchOptions,
         headers,
         signal: controller.signal,
+        credentials: 'include', // important: send refresh cookie automatically
       });
 
       clearTimeout(timeoutId);
 
       // Handle 204 No Content
-      if (response.status === 204) {
-        return undefined as T;
-      }
+      if (response.status === 204) return undefined as T;
 
-      // Handle error responses
+      // Handle errors
       if (!response.ok) {
-        let errorMessage = 'An error occurred';
-        try {
-          const errorData = await response.text();
-          errorMessage = errorData || response.statusText;
-        } catch {
-          errorMessage = response.statusText;
-        }
-        throw this.createError(errorMessage, response.status);
+        const text = await response.text();
+        throw this.createError(text || response.statusText, response.status);
       }
 
-      // Parse JSON response
       const text = await response.text();
-      if (!text) {
-        return undefined as T;
-      }
+      if (!text) return undefined as T;
       return JSON.parse(text) as T;
     } catch (error) {
       clearTimeout(timeoutId);
-      
+
       if (error instanceof Error && error.name === 'AbortError') {
         throw this.createError('Request timeout', 408);
       }
-      
+
       throw error;
     }
   }
@@ -92,34 +75,29 @@ class HttpClient {
     return { message, status };
   }
 
-  private async tryRefreshToken(): Promise<boolean> {
-    const refreshToken = tokenService.getRefreshToken();
-    if (!refreshToken) {
-      return false;
-    }
-
+  /** Try refresh token via cookie */
+  private async tryRefreshToken(): Promise<string | null> {
     try {
-      const response = await fetch(`${API_CONFIG.AUTH_BASE_URL}/auth/refresh`, {
+      const res = await fetch(`${API_CONFIG.AUTH_BASE_URL}/auth/refresh`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refreshToken }),
+        credentials: 'include', // 🔴 cookie-based refresh
       });
 
-      if (!response.ok) {
-        tokenService.clearTokens();
-        return false;
+      if (!res.ok) {
+        tokenService.clearAccessToken();
+        return null;
       }
 
-      const tokens = await response.json();
-      tokenService.setTokens(tokens.accessToken, tokens.refreshToken);
-      return true;
+      const data = await res.json();
+      tokenService.setAccessToken(data.accessToken);
+      return data.accessToken;
     } catch {
-      tokenService.clearTokens();
-      return false;
+      tokenService.clearAccessToken();
+      return null;
     }
   }
 
-  // Auth API methods
+  // ---------------- Auth API ----------------
   async authGet<T>(endpoint: string, options?: RequestOptions): Promise<T> {
     return this.request<T>(API_CONFIG.AUTH_BASE_URL, endpoint, { ...options, method: 'GET' });
   }
@@ -136,9 +114,9 @@ class HttpClient {
     return this.request<T>(API_CONFIG.AUTH_BASE_URL, endpoint, { ...options, method: 'DELETE' });
   }
 
-  // Device & Asset API methods
+  // ---------------- Device & Asset API ----------------
   async get<T>(endpoint: string, options?: RequestOptions): Promise<T> {
-    return this.request<T>(API_CONFIG.DEVICE_ASSET_BASE_URL, endpoint, { ...options, method: 'GET' });
+    return this.request<T>(API_CONFIG.DEVICE_ASSET_BASE_URL, endpoint, { ...options, method: 'GET', requiresAuth: true });
   }
 
   async post<T>(endpoint: string, body?: unknown, options?: RequestOptions): Promise<T> {
@@ -146,6 +124,7 @@ class HttpClient {
       ...options,
       method: 'POST',
       body: body ? JSON.stringify(body) : undefined,
+      requiresAuth: true,
     });
   }
 
@@ -154,11 +133,12 @@ class HttpClient {
       ...options,
       method: 'PUT',
       body: body ? JSON.stringify(body) : undefined,
+      requiresAuth: true,
     });
   }
 
   async delete<T>(endpoint: string, options?: RequestOptions): Promise<T> {
-    return this.request<T>(API_CONFIG.DEVICE_ASSET_BASE_URL, endpoint, { ...options, method: 'DELETE' });
+    return this.request<T>(API_CONFIG.DEVICE_ASSET_BASE_URL, endpoint, { ...options, method: 'DELETE', requiresAuth: true });
   }
 }
 

@@ -1,6 +1,6 @@
-import { STORAGE_KEYS } from './config';
+// src/lib/api/token-service.ts
 
-// Parse JWT payload without external library
+// Only handle access token on frontend
 const parseJwt = (token: string): { exp?: number; sub?: string; email?: string } | null => {
   try {
     const base64Url = token.split('.')[1];
@@ -17,68 +17,45 @@ const parseJwt = (token: string): { exp?: number; sub?: string; email?: string }
   }
 };
 
-const getStorage = (): Storage => {
-  const storageType = localStorage.getItem(STORAGE_KEYS.STORAGE_TYPE);
-  return storageType === 'session' ? sessionStorage : localStorage;
-};
-
 export const tokenService = {
+  TOKEN_KEY: 'jwt_token',
+
+  /** Get access token from sessionStorage only */
   getAccessToken: (): string | null => {
-    return localStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN) || 
-           sessionStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN);
+    return sessionStorage.getItem(tokenService.TOKEN_KEY);
   },
 
-  getRefreshToken: (): string | null => {
-    return localStorage.getItem(STORAGE_KEYS.REFRESH_TOKEN) || 
-           sessionStorage.getItem(STORAGE_KEYS.REFRESH_TOKEN);
+  /** Set access token in sessionStorage */
+  setAccessToken: (token: string): void => {
+    sessionStorage.setItem(tokenService.TOKEN_KEY, token);
   },
 
-  setTokens: (accessToken: string, refreshToken: string, rememberMe: boolean = true): void => {
-    // Clear both storages first
-    localStorage.removeItem(STORAGE_KEYS.ACCESS_TOKEN);
-    localStorage.removeItem(STORAGE_KEYS.REFRESH_TOKEN);
-    sessionStorage.removeItem(STORAGE_KEYS.ACCESS_TOKEN);
-    sessionStorage.removeItem(STORAGE_KEYS.REFRESH_TOKEN);
-
-    const storage = rememberMe ? localStorage : sessionStorage;
-    localStorage.setItem(STORAGE_KEYS.STORAGE_TYPE, rememberMe ? 'local' : 'session');
-    storage.setItem(STORAGE_KEYS.ACCESS_TOKEN, accessToken);
-    storage.setItem(STORAGE_KEYS.REFRESH_TOKEN, refreshToken);
+  /** Remove access token */
+  clearAccessToken: (): void => {
+    sessionStorage.removeItem(tokenService.TOKEN_KEY);
   },
 
-  clearTokens: (): void => {
-    localStorage.removeItem(STORAGE_KEYS.ACCESS_TOKEN);
-    localStorage.removeItem(STORAGE_KEYS.REFRESH_TOKEN);
-    sessionStorage.removeItem(STORAGE_KEYS.ACCESS_TOKEN);
-    sessionStorage.removeItem(STORAGE_KEYS.REFRESH_TOKEN);
-    localStorage.removeItem(STORAGE_KEYS.STORAGE_TYPE);
-  },
-
+  /** Check if access token exists and is valid */
   isAuthenticated: (): boolean => {
     const token = tokenService.getAccessToken();
-    if (!token) return false;
-    return !tokenService.isTokenExpired(token);
+    return !!token && !tokenService.isTokenExpired(token);
   },
 
+  /** Check if token is expired */
   isTokenExpired: (token: string): boolean => {
     const payload = parseJwt(token);
     if (!payload?.exp) return true;
-    // Add 30 second buffer for clock skew
-    return Date.now() >= (payload.exp * 1000) - 30000;
+    // 5s buffer for clock skew
+    return Date.now() + 5000 >= payload.exp * 1000;
   },
 
-  getTokenExpiration: (token: string): number | null => {
-    const payload = parseJwt(token);
-    return payload?.exp ? payload.exp * 1000 : null;
-  },
+  /** Get token payload */
+  getTokenPayload: (token: string) => parseJwt(token),
 
+  /** Get milliseconds until token expires */
   getTimeUntilExpiration: (token: string): number => {
-    const expiration = tokenService.getTokenExpiration(token);
-    if (!expiration) return 0;
-    return Math.max(0, expiration - Date.now());
-  },
-
-  getTokenPayload: (token: string) => {
-    return parseJwt(token);
+    const payload = parseJwt(token);
+    if (!payload?.exp) return 0;
+    return Math.max(0, payload.exp * 1000 - Date.now());
   },
 };
