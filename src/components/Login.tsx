@@ -40,8 +40,20 @@ const Login = ({ onSuccess, onRegisterClick }: LoginProps) => {
 
     try {
       const data = await api.login(email, password);
-      auth.setToken(data.token, rememberMe);
-      authLogin(email, data.role || "admin"); // Use role from API or default to admin for demo
+
+      // Correctly use accessToken
+      const { accessToken, refreshToken, role } = data;
+
+      if (!accessToken || auth.isTokenExpired(accessToken)) {
+        throw new Error("Received an expired token from API");
+      }
+
+      // Store both tokens
+      auth.setToken(accessToken, refreshToken, rememberMe);
+
+      // Update auth context
+      authLogin(email, role || "admin");
+
       onSuccess();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
