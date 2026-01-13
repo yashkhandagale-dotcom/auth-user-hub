@@ -2,19 +2,20 @@ import { useState } from "react";
 import {
   Plus,
   Search,
-  Filter,
   Download,
   Trash2,
   Edit,
   MoreHorizontal,
   Package,
-  FileText,
-  HardDrive,
-  Monitor as MonitorIcon,
   ArrowUpDown,
+  Loader2,
+  AlertCircle,
+  Link,
+  RefreshCw,
+  Settings,
 } from "lucide-react";
-import { Asset, AssetCategory, AssetStatus } from "@/types";
-import { mockAssets, mockUsers, mockDevices } from "@/data/mockData";
+import { useAssets } from "@/hooks/useAssets";
+import { ApiAsset, ApiAvailableDevice } from "@/lib/api/types";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -33,6 +34,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import {
   Dialog,
@@ -40,6 +42,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogFooter,
+  DialogDescription,
 } from "@/components/ui/dialog";
 import {
   Select,
@@ -49,84 +52,78 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import { toast } from "@/hooks/use-toast";
-import { format } from "date-fns";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
-const categoryIcons: Record<AssetCategory, React.ElementType> = {
-  hardware: HardDrive,
-  software: FileText,
-  peripheral: MonitorIcon,
-  license: FileText,
-  other: Package,
-};
-
-const statusColors: Record<AssetStatus, string> = {
-  available: "bg-green-500/10 text-green-600 border-green-500/20",
-  in_use: "bg-blue-500/10 text-blue-600 border-blue-500/20",
-  reserved: "bg-yellow-500/10 text-yellow-600 border-yellow-500/20",
-  retired: "bg-red-500/10 text-red-600 border-red-500/20",
-};
-
-type SortField = "name" | "category" | "status" | "cost" | "lastUpdated";
+type SortField = "assetName" | "deviceName";
 type SortDirection = "asc" | "desc";
 
 const AssetManagement = () => {
-  const [assets, setAssets] = useState<Asset[]>(mockAssets);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [statusFilter, setStatusFilter] = useState<AssetStatus | "all">("all");
-  const [categoryFilter, setCategoryFilter] = useState<AssetCategory | "all">("all");
-  const [sortField, setSortField] = useState<SortField>("name");
-  const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
-  const [selectedAssets, setSelectedAssets] = useState<string[]>([]);
-  const [isDialogOpen, setIsDialogOpen] = useState(false);
-  const [editingAsset, setEditingAsset] = useState<Asset | null>(null);
-  const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 5;
+  const {
+    assets,
+    availableDevices,
+    isLoading,
+    isError,
+    error,
+    createAsset,
+    updateAsset,
+    deleteAsset,
+    configureAssetWithDevice,
+    bulkDeleteAssets,
+    isCreating,
+    isUpdating,
+    isDeleting,
+    isConfiguring,
+    isBulkDeleting,
+    refetch,
+    refetchAvailableDevices,
+  } = useAssets();
 
-  const [formData, setFormData] = useState<Partial<Asset>>({
-    name: "",
-    category: "hardware",
-    status: "available",
-    assetTag: "",
-    linkedDeviceId: "",
-    assignedUserId: "",
-    cost: 0,
-    expiryDate: "",
-    notes: "",
+  const [searchTerm, setSearchTerm] = useState("");
+  const [configuredFilter, setConfiguredFilter] = useState<"all" | "configured" | "unlinked">("all");
+  const [sortField, setSortField] = useState<SortField>("assetName");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
+  const [selectedAssets, setSelectedAssets] = useState<number[]>([]);
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [isConfigureDialogOpen, setIsConfigureDialogOpen] = useState(false);
+  const [editingAsset, setEditingAsset] = useState<ApiAsset | null>(null);
+  const [configuringAsset, setConfiguringAsset] = useState<ApiAsset | null>(null);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 10;
+
+  // Form state
+  const [formData, setFormData] = useState({
+    assetName: "",
   });
 
+  // Filter and sort assets
   const filteredAssets = assets
     .filter((asset) => {
       const matchesSearch =
-        asset.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        asset.assetTag.toLowerCase().includes(searchTerm.toLowerCase());
-      const matchesStatus = statusFilter === "all" || asset.status === statusFilter;
-      const matchesCategory = categoryFilter === "all" || asset.category === categoryFilter;
-      return matchesSearch && matchesStatus && matchesCategory;
+        asset.assetName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (asset.deviceName?.toLowerCase().includes(searchTerm.toLowerCase()) ?? false);
+      
+      const matchesFilter = 
+        configuredFilter === "all" ||
+        (configuredFilter === "configured" && asset.deviceId !== null) ||
+        (configuredFilter === "unlinked" && asset.deviceId === null);
+      
+      return matchesSearch && matchesFilter;
     })
     .sort((a, b) => {
       let comparison = 0;
       switch (sortField) {
-        case "name":
-          comparison = a.name.localeCompare(b.name);
+        case "assetName":
+          comparison = a.assetName.localeCompare(b.assetName);
           break;
-        case "category":
-          comparison = a.category.localeCompare(b.category);
-          break;
-        case "status":
-          comparison = a.status.localeCompare(b.status);
-          break;
-        case "cost":
-          comparison = a.cost - b.cost;
-          break;
-        case "lastUpdated":
-          comparison = new Date(a.lastUpdated).getTime() - new Date(b.lastUpdated).getTime();
+        case "deviceName":
+          comparison = (a.deviceName || "").localeCompare(b.deviceName || "");
           break;
       }
       return sortDirection === "asc" ? comparison : -comparison;
     });
 
+  // Pagination
   const totalPages = Math.ceil(filteredAssets.length / itemsPerPage);
   const paginatedAssets = filteredAssets.slice(
     (currentPage - 1) * itemsPerPage,
@@ -150,7 +147,7 @@ const AssetManagement = () => {
     }
   };
 
-  const handleSelectAsset = (assetId: string, checked: boolean) => {
+  const handleSelectAsset = (assetId: number, checked: boolean) => {
     if (checked) {
       setSelectedAssets([...selectedAssets, assetId]);
     } else {
@@ -160,151 +157,108 @@ const AssetManagement = () => {
 
   const handleCreateAsset = () => {
     setEditingAsset(null);
-    setFormData({
-      name: "",
-      category: "hardware",
-      status: "available",
-      assetTag: "",
-      linkedDeviceId: "",
-      assignedUserId: "",
-      cost: 0,
-      expiryDate: "",
-      notes: "",
-    });
+    setFormData({ assetName: "" });
     setIsDialogOpen(true);
   };
 
-  const handleEditAsset = (asset: Asset) => {
+  const handleEditAsset = (asset: ApiAsset) => {
     setEditingAsset(asset);
-    setFormData({
-      name: asset.name,
-      category: asset.category,
-      status: asset.status,
-      assetTag: asset.assetTag,
-      linkedDeviceId: asset.linkedDeviceId || "",
-      assignedUserId: asset.assignedUserId || "",
-      cost: asset.cost,
-      expiryDate: asset.expiryDate || "",
-      notes: asset.notes || "",
-    });
+    setFormData({ assetName: asset.assetName });
     setIsDialogOpen(true);
   };
 
   const handleSaveAsset = () => {
-    if (!formData.name || !formData.assetTag) {
-      toast({
-        title: "Validation Error",
-        description: "Please fill in all required fields.",
-        variant: "destructive",
-      });
+    if (!formData.assetName.trim()) {
       return;
     }
 
-    const assignedUser = mockUsers.find((u) => u.id === formData.assignedUserId);
-    const linkedDevice = mockDevices.find((d) => d.id === formData.linkedDeviceId);
-
     if (editingAsset) {
-      setAssets(
-        assets.map((a) =>
-          a.id === editingAsset.id
-            ? {
-                ...a,
-                ...formData,
-                assignedUserName: assignedUser?.username,
-                linkedDeviceName: linkedDevice?.name,
-                lastUpdated: new Date().toISOString(),
-              }
-            : a
-        )
-      );
-      toast({
-        title: "Asset Updated",
-        description: `${formData.name} has been updated successfully.`,
+      updateAsset({
+        id: editingAsset.id,
+        data: { assetName: formData.assetName },
       });
     } else {
-      const newAsset: Asset = {
-        id: `a${Date.now()}`,
-        name: formData.name!,
-        category: formData.category as AssetCategory,
-        status: formData.status as AssetStatus,
-        assetTag: formData.assetTag!,
-        linkedDeviceId: formData.linkedDeviceId || undefined,
-        linkedDeviceName: linkedDevice?.name,
-        assignedUserId: formData.assignedUserId || undefined,
-        assignedUserName: assignedUser?.username,
-        purchaseDate: new Date().toISOString(),
-        expiryDate: formData.expiryDate || undefined,
-        cost: formData.cost || 0,
-        lastUpdated: new Date().toISOString(),
-        notes: formData.notes,
-      };
-      setAssets([...assets, newAsset]);
-      toast({
-        title: "Asset Created",
-        description: `${formData.name} has been added successfully.`,
-      });
+      createAsset({ assetName: formData.assetName });
     }
     setIsDialogOpen(false);
   };
 
-  const handleDeleteAsset = (assetId: string) => {
-    const asset = assets.find((a) => a.id === assetId);
-    setAssets(assets.filter((a) => a.id !== assetId));
+  const handleDeleteAsset = (assetId: number) => {
+    deleteAsset(assetId);
     setSelectedAssets(selectedAssets.filter((id) => id !== assetId));
-    toast({
-      title: "Asset Deleted",
-      description: `${asset?.name} has been removed.`,
-    });
   };
 
   const handleBulkDelete = () => {
-    setAssets(assets.filter((a) => !selectedAssets.includes(a.id)));
-    toast({
-      title: "Assets Deleted",
-      description: `${selectedAssets.length} assets have been removed.`,
-    });
+    bulkDeleteAssets(selectedAssets);
     setSelectedAssets([]);
   };
 
-  const handleBulkStatusUpdate = (status: AssetStatus) => {
-    setAssets(
-      assets.map((a) =>
-        selectedAssets.includes(a.id)
-          ? { ...a, status, lastUpdated: new Date().toISOString() }
-          : a
-      )
-    );
-    toast({
-      title: "Status Updated",
-      description: `${selectedAssets.length} assets updated to ${status.replace("_", " ")}.`,
+  const handleOpenConfigureDialog = (asset: ApiAsset) => {
+    setConfiguringAsset(asset);
+    setSelectedDeviceId("");
+    refetchAvailableDevices();
+    setIsConfigureDialogOpen(true);
+  };
+
+  const handleConfigureAsset = () => {
+    if (!configuringAsset || !selectedDeviceId) return;
+    
+    configureAssetWithDevice({
+      assetId: configuringAsset.id,
+      deviceId: parseInt(selectedDeviceId),
     });
-    setSelectedAssets([]);
+    setIsConfigureDialogOpen(false);
+    setConfiguringAsset(null);
+    setSelectedDeviceId("");
   };
 
   const exportToCSV = () => {
-    const headers = ["Name", "Category", "Status", "Asset Tag", "Linked Device", "Assigned To", "Cost", "Last Updated"];
+    const headers = ["ID", "Asset Name", "Device ID", "Device Name"];
     const rows = filteredAssets.map((a) => [
-      a.name,
-      a.category,
-      a.status,
-      a.assetTag,
-      a.linkedDeviceName || "",
-      a.assignedUserName || "",
-      a.cost.toFixed(2),
-      format(new Date(a.lastUpdated), "yyyy-MM-dd HH:mm"),
+      a.id.toString(),
+      a.assetName,
+      a.deviceId?.toString() || "",
+      a.deviceName || "",
     ]);
-    const csv = [headers, ...rows].map((row) => row.join(",")).join("\n");
+    const csv = [headers, ...rows].map((row) => row.map(cell => `"${cell}"`).join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
     a.download = "assets.csv";
     a.click();
-    toast({
-      title: "Export Complete",
-      description: "Assets exported to CSV successfully.",
-    });
   };
+
+  // Loading state
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="flex flex-col items-center gap-4">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          <p className="text-muted-foreground">Loading assets...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Error state
+  if (isError) {
+    return (
+      <div className="space-y-6">
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Error loading assets</AlertTitle>
+          <AlertDescription>
+            {error instanceof Error ? error.message : "Failed to load assets. Please try again."}
+          </AlertDescription>
+        </Alert>
+        <Button onClick={() => refetch()} variant="outline" className="gap-2">
+          <RefreshCw className="h-4 w-4" />
+          Retry
+        </Button>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -313,16 +267,16 @@ const AssetManagement = () => {
         <div>
           <h1 className="text-3xl font-bold text-foreground">Asset Management</h1>
           <p className="text-muted-foreground mt-1">
-            Manage hardware, software, and licenses.
+            Manage and configure assets with devices.
           </p>
         </div>
-        <Button onClick={handleCreateAsset} className="gap-2">
-          <Plus className="h-4 w-4" />
+        <Button onClick={handleCreateAsset} className="gap-2" disabled={isCreating}>
+          {isCreating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
           Add Asset
         </Button>
       </div>
 
-      {/* Filters */}
+      {/* Filters and Search */}
       <Card>
         <CardContent className="p-4">
           <div className="flex flex-col md:flex-row gap-4">
@@ -335,41 +289,36 @@ const AssetManagement = () => {
                 className="pl-9"
               />
             </div>
-            <Select
-              value={statusFilter}
-              onValueChange={(value) => setStatusFilter(value as AssetStatus | "all")}
-            >
-              <SelectTrigger className="w-full md:w-40">
-                <Filter className="h-4 w-4 mr-2" />
-                <SelectValue placeholder="Status" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Status</SelectItem>
-                <SelectItem value="available">Available</SelectItem>
-                <SelectItem value="in_use">In Use</SelectItem>
-                <SelectItem value="reserved">Reserved</SelectItem>
-                <SelectItem value="retired">Retired</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select
-              value={categoryFilter}
-              onValueChange={(value) => setCategoryFilter(value as AssetCategory | "all")}
-            >
-              <SelectTrigger className="w-full md:w-40">
-                <SelectValue placeholder="Category" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Categories</SelectItem>
-                <SelectItem value="hardware">Hardware</SelectItem>
-                <SelectItem value="software">Software</SelectItem>
-                <SelectItem value="peripheral">Peripheral</SelectItem>
-                <SelectItem value="license">License</SelectItem>
-                <SelectItem value="other">Other</SelectItem>
-              </SelectContent>
-            </Select>
+            <div className="flex gap-2">
+              <Button
+                variant={configuredFilter === "all" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setConfiguredFilter("all")}
+              >
+                All
+              </Button>
+              <Button
+                variant={configuredFilter === "configured" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setConfiguredFilter("configured")}
+              >
+                Configured
+              </Button>
+              <Button
+                variant={configuredFilter === "unlinked" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setConfiguredFilter("unlinked")}
+              >
+                Unlinked
+              </Button>
+            </div>
             <Button variant="outline" onClick={exportToCSV} className="gap-2">
               <Download className="h-4 w-4" />
               Export
+            </Button>
+            <Button variant="outline" onClick={() => refetch()} className="gap-2">
+              <RefreshCw className="h-4 w-4" />
+              Refresh
             </Button>
           </div>
         </CardContent>
@@ -383,26 +332,17 @@ const AssetManagement = () => {
               {selectedAssets.length} selected
             </span>
             <Button
-              variant="outline"
-              size="sm"
-              onClick={() => handleBulkStatusUpdate("available")}
-            >
-              Set Available
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => handleBulkStatusUpdate("in_use")}
-            >
-              Set In Use
-            </Button>
-            <Button
               variant="destructive"
               size="sm"
               onClick={handleBulkDelete}
               className="gap-2"
+              disabled={isBulkDeleting}
             >
-              <Trash2 className="h-4 w-4" />
+              {isBulkDeleting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Trash2 className="h-4 w-4" />
+              )}
               Delete Selected
             </Button>
           </CardContent>
@@ -424,51 +364,40 @@ const AssetManagement = () => {
                     onCheckedChange={handleSelectAll}
                   />
                 </TableHead>
+                <TableHead className="w-16">ID</TableHead>
                 <TableHead>
                   <button
-                    onClick={() => handleSort("name")}
+                    onClick={() => handleSort("assetName")}
                     className="flex items-center gap-1 hover:text-foreground"
                   >
-                    Asset
+                    Asset Name
                     <ArrowUpDown className="h-4 w-4" />
                   </button>
                 </TableHead>
                 <TableHead>
                   <button
-                    onClick={() => handleSort("category")}
+                    onClick={() => handleSort("deviceName")}
                     className="flex items-center gap-1 hover:text-foreground"
                   >
-                    Category
+                    Linked Device
                     <ArrowUpDown className="h-4 w-4" />
                   </button>
                 </TableHead>
-                <TableHead>
-                  <button
-                    onClick={() => handleSort("status")}
-                    className="flex items-center gap-1 hover:text-foreground"
-                  >
-                    Status
-                    <ArrowUpDown className="h-4 w-4" />
-                  </button>
-                </TableHead>
-                <TableHead>Linked Device</TableHead>
-                <TableHead>Assigned To</TableHead>
-                <TableHead>
-                  <button
-                    onClick={() => handleSort("cost")}
-                    className="flex items-center gap-1 hover:text-foreground"
-                  >
-                    Cost
-                    <ArrowUpDown className="h-4 w-4" />
-                  </button>
-                </TableHead>
+                <TableHead>Status</TableHead>
                 <TableHead className="w-12">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {paginatedAssets.map((asset) => {
-                const Icon = categoryIcons[asset.category];
-                return (
+              {paginatedAssets.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                    {searchTerm || configuredFilter !== "all" 
+                      ? "No assets match your filters" 
+                      : "No assets found. Click 'Add Asset' to create one."}
+                  </TableCell>
+                </TableRow>
+              ) : (
+                paginatedAssets.map((asset) => (
                   <TableRow key={asset.id}>
                     <TableCell>
                       <Checkbox
@@ -478,40 +407,43 @@ const AssetManagement = () => {
                         }
                       />
                     </TableCell>
+                    <TableCell className="font-mono text-sm text-muted-foreground">
+                      #{asset.id}
+                    </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-3">
                         <div className="h-8 w-8 rounded-lg bg-muted flex items-center justify-center">
-                          <Icon className="h-4 w-4 text-muted-foreground" />
+                          <Package className="h-4 w-4 text-muted-foreground" />
                         </div>
-                        <div>
-                          <p className="font-medium">{asset.name}</p>
-                          <p className="text-xs text-muted-foreground">
-                            {asset.assetTag}
-                          </p>
-                        </div>
+                        <p className="font-medium">{asset.assetName}</p>
                       </div>
                     </TableCell>
-                    <TableCell className="capitalize">{asset.category}</TableCell>
                     <TableCell>
-                      <Badge variant="outline" className={statusColors[asset.status]}>
-                        {asset.status.replace("_", " ")}
+                      {asset.deviceName ? (
+                        <div className="flex items-center gap-2">
+                          <Link className="h-3 w-3 text-muted-foreground" />
+                          <span>{asset.deviceName}</span>
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground">Not linked</span>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <Badge
+                        variant="outline"
+                        className={
+                          asset.deviceId
+                            ? "bg-green-500/10 text-green-600 border-green-500/20"
+                            : "bg-yellow-500/10 text-yellow-600 border-yellow-500/20"
+                        }
+                      >
+                        {asset.deviceId ? "Configured" : "Unlinked"}
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      {asset.linkedDeviceName || (
-                        <span className="text-muted-foreground">—</span>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {asset.assignedUserName || (
-                        <span className="text-muted-foreground">Unassigned</span>
-                      )}
-                    </TableCell>
-                    <TableCell>${asset.cost.toFixed(2)}</TableCell>
-                    <TableCell>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon">
+                          <Button variant="ghost" size="icon" className="h-8 w-8">
                             <MoreHorizontal className="h-4 w-4" />
                           </Button>
                         </DropdownMenuTrigger>
@@ -520,6 +452,13 @@ const AssetManagement = () => {
                             <Edit className="h-4 w-4 mr-2" />
                             Edit
                           </DropdownMenuItem>
+                          {!asset.deviceId && (
+                            <DropdownMenuItem onClick={() => handleOpenConfigureDialog(asset)}>
+                              <Settings className="h-4 w-4 mr-2" />
+                              Configure with Device
+                            </DropdownMenuItem>
+                          )}
+                          <DropdownMenuSeparator />
                           <DropdownMenuItem
                             onClick={() => handleDeleteAsset(asset.id)}
                             className="text-destructive"
@@ -531,14 +470,7 @@ const AssetManagement = () => {
                       </DropdownMenu>
                     </TableCell>
                   </TableRow>
-                );
-              })}
-              {paginatedAssets.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
-                    No assets found
-                  </TableCell>
-                </TableRow>
+                ))
               )}
             </TableBody>
           </Table>
@@ -562,16 +494,19 @@ const AssetManagement = () => {
             >
               Previous
             </Button>
-            {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
-              <Button
-                key={page}
-                variant={currentPage === page ? "default" : "outline"}
-                size="sm"
-                onClick={() => setCurrentPage(page)}
-              >
-                {page}
-              </Button>
-            ))}
+            {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+              const page = i + 1;
+              return (
+                <Button
+                  key={page}
+                  variant={currentPage === page ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setCurrentPage(page)}
+                >
+                  {page}
+                </Button>
+              );
+            })}
             <Button
               variant="outline"
               size="sm"
@@ -592,151 +527,18 @@ const AssetManagement = () => {
               {editingAsset ? "Edit Asset" : "Add New Asset"}
             </DialogTitle>
           </DialogHeader>
-          <div className="space-y-4 py-4 max-h-[60vh] overflow-y-auto">
+          <div className="space-y-4 py-4">
             <div className="space-y-2">
-              <Label htmlFor="name">Asset Name *</Label>
+              <Label htmlFor="assetName">
+                Asset Name <span className="text-destructive">*</span>
+              </Label>
               <Input
-                id="name"
-                value={formData.name}
-                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                id="assetName"
+                value={formData.assetName}
+                onChange={(e) =>
+                  setFormData({ ...formData, assetName: e.target.value })
+                }
                 placeholder="Enter asset name"
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="category">Category *</Label>
-                <Select
-                  value={formData.category}
-                  onValueChange={(value) =>
-                    setFormData({ ...formData, category: value as AssetCategory })
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="hardware">Hardware</SelectItem>
-                    <SelectItem value="software">Software</SelectItem>
-                    <SelectItem value="peripheral">Peripheral</SelectItem>
-                    <SelectItem value="license">License</SelectItem>
-                    <SelectItem value="other">Other</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="status">Status *</Label>
-                <Select
-                  value={formData.status}
-                  onValueChange={(value) =>
-                    setFormData({ ...formData, status: value as AssetStatus })
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="available">Available</SelectItem>
-                    <SelectItem value="in_use">In Use</SelectItem>
-                    <SelectItem value="reserved">Reserved</SelectItem>
-                    <SelectItem value="retired">Retired</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="assetTag">Asset Tag *</Label>
-              <Input
-                id="assetTag"
-                value={formData.assetTag}
-                onChange={(e) =>
-                  setFormData({ ...formData, assetTag: e.target.value })
-                }
-                placeholder="Enter asset tag"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="cost">Cost ($)</Label>
-              <Input
-                id="cost"
-                type="number"
-                step="0.01"
-                value={formData.cost}
-                onChange={(e) =>
-                  setFormData({ ...formData, cost: parseFloat(e.target.value) || 0 })
-                }
-                placeholder="0.00"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="linkedDevice">Linked Device</Label>
-              <Select
-                value={formData.linkedDeviceId || "none"}
-                onValueChange={(value) =>
-                  setFormData({
-                    ...formData,
-                    linkedDeviceId: value === "none" ? "" : value,
-                  })
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select device" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">None</SelectItem>
-                  {mockDevices.map((device) => (
-                    <SelectItem key={device.id} value={device.id}>
-                      {device.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="assignedUser">Assigned User</Label>
-              <Select
-                value={formData.assignedUserId || "unassigned"}
-                onValueChange={(value) =>
-                  setFormData({
-                    ...formData,
-                    assignedUserId: value === "unassigned" ? "" : value,
-                  })
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select user" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="unassigned">Unassigned</SelectItem>
-                  {mockUsers.map((user) => (
-                    <SelectItem key={user.id} value={user.id}>
-                      {user.username}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="expiryDate">Expiry Date</Label>
-              <Input
-                id="expiryDate"
-                type="date"
-                value={formData.expiryDate ? formData.expiryDate.split("T")[0] : ""}
-                onChange={(e) =>
-                  setFormData({
-                    ...formData,
-                    expiryDate: e.target.value ? new Date(e.target.value).toISOString() : "",
-                  })
-                }
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="notes">Notes</Label>
-              <Textarea
-                id="notes"
-                value={formData.notes}
-                onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                placeholder="Add notes..."
-                rows={3}
               />
             </div>
           </div>
@@ -744,8 +546,64 @@ const AssetManagement = () => {
             <Button variant="outline" onClick={() => setIsDialogOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={handleSaveAsset}>
-              {editingAsset ? "Save Changes" : "Add Asset"}
+            <Button 
+              onClick={handleSaveAsset} 
+              disabled={!formData.assetName.trim() || isCreating || isUpdating}
+            >
+              {(isCreating || isUpdating) && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              {editingAsset ? "Update" : "Create"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Configure Asset Dialog */}
+      <Dialog open={isConfigureDialogOpen} onOpenChange={setIsConfigureDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Configure Asset with Device</DialogTitle>
+            <DialogDescription>
+              Link "{configuringAsset?.assetName}" to an available device.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="deviceSelect">Select Device</Label>
+              <Select value={selectedDeviceId} onValueChange={setSelectedDeviceId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Choose a device..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableDevices.length === 0 ? (
+                    <SelectItem value="" disabled>
+                      No available devices
+                    </SelectItem>
+                  ) : (
+                    availableDevices.map((device) => (
+                      <SelectItem key={device.id} value={device.id.toString()}>
+                        {device.deviceName} - {device.description}
+                      </SelectItem>
+                    ))
+                  )}
+                </SelectContent>
+              </Select>
+              {availableDevices.length === 0 && (
+                <p className="text-sm text-muted-foreground">
+                  All devices are already configured with assets.
+                </p>
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsConfigureDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button 
+              onClick={handleConfigureAsset} 
+              disabled={!selectedDeviceId || isConfiguring}
+            >
+              {isConfiguring && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Configure
             </Button>
           </DialogFooter>
         </DialogContent>
